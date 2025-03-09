@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,21 +50,32 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
         return
     }
 
+    mediaType := header.Header.Get("Content-Type")
+    if mediaType == "" {
+        mediaType = "image/png"
+    }
+
+    dataEncoded := base64.StdEncoding.EncodeToString(data)
+    // The format is:data:<media-type>;base64,<data>
+    // Create a data URL with the media type and base64 encoded image data.
+    dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, dataEncoded)
+
     vid, err := cfg.db.GetVideo(videoID)
     if err != nil {
         respondWithError(w, http.StatusUnauthorized, "User not authorized", err)
         return
     }
 
-    tn := thumbnail{
-        data: data,
-        mediaType: header.Header.Get("Content-Type"),
-    }
+    //tn := thumbnail{
+    //    data: data,
+    //    mediaType: header.Header.Get("Content-Type"),
+    //}
 
-    videoThumbnails[vid.ID] = tn
+    //videoThumbnails[vid.ID] = tn
 
-    thumbnailUrl := fmt.Sprintf("/api/thumbnails/%s", vid.ID)
-    vid.ThumbnailURL =  &thumbnailUrl
+    //thumbnailUrl := fmt.Sprintf("/api/thumbnails/%s", vid.ID)
+    //vid.ThumbnailURL =  &thumbnailUrl
+    vid.ThumbnailURL =  &dataURL
 
     err = cfg.db.UpdateVideo(vid)
     if err != nil {
@@ -71,5 +83,10 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
         return
     }
 
-	respondWithJSON(w, http.StatusOK, tn)
+    respondWithJSON(w, http.StatusOK, struct {
+        Message string `json:"message"`
+    }{
+        Message: "Thumbnail uploaded successfully",
+    })
+
 }
