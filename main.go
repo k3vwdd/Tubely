@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
-	//	"github.com/google/uuid"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -14,6 +16,7 @@ import (
 
 type apiConfig struct {
 	db               database.Client
+    s3Client        *s3.Client
 	jwtSecret        string
 	platform         string
 	filepathRoot     string
@@ -24,11 +27,24 @@ type apiConfig struct {
 	port             string
 }
 
-// global map
-// var videoThumbnails = map[uuid.UUID]thumbnail{}
-
 func main() {
-	godotenv.Load(".env")
+    godotenv.Load(".env")
+    // Using the SDK's default configuration, load additional config
+    // and credentials values from the environment variables, shared
+    // credentials, and shared configuration files
+    s3Region := os.Getenv("S3_REGION")
+    if s3Region == "" {
+        log.Fatal("S3_REGION environment variable is not set")
+    }
+
+    awscfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(s3Region))
+    if err != nil {
+        log.Fatalf("unable to load SDK config, %v", err)
+    }
+
+    s3client := s3.NewFromConfig(awscfg)
+
+
 
 	pathToDB := os.Getenv("DB_PATH")
 	if pathToDB == "" {
@@ -65,10 +81,6 @@ func main() {
 		log.Fatal("S3_BUCKET environment variable is not set")
 	}
 
-	s3Region := os.Getenv("S3_REGION")
-	if s3Region == "" {
-		log.Fatal("S3_REGION environment variable is not set")
-	}
 
 	s3CfDistribution := os.Getenv("S3_CF_DISTRO")
 	if s3CfDistribution == "" {
@@ -81,6 +93,7 @@ func main() {
 	}
 
 	cfg := apiConfig{
+        s3Client:         s3client,
 		db:               db,
 		jwtSecret:        jwtSecret,
 		platform:         platform,
@@ -102,7 +115,7 @@ func main() {
 	mux.Handle("/app/", appHandler)
 
 	assetsHandler := http.StripPrefix("/assets", http.FileServer(http.Dir(assetsRoot)))
-	mux.Handle("/assets/", cacheMiddleware(assetsHandler))
+	mux.Handle("/assets/", noCacheMiddleware(assetsHandler))
 
 	mux.HandleFunc("POST /api/login", cfg.handlerLogin)
 	mux.HandleFunc("POST /api/refresh", cfg.handlerRefresh)

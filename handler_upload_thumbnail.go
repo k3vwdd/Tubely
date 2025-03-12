@@ -1,10 +1,10 @@
 package main
 
 import (
-	"encoding/base64"
-	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -30,63 +30,60 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
+	const maxMemory = 10 << 20 // 10 MB
+	r.ParseMultipartForm(maxMemory)
 
-    // multiply by powers of 2. 10 << 20 is the same as 10 * 1024 * 1024, which is 10MB
-    const maxMemory = 10 << 20
-    r.ParseMultipartForm(maxMemory)
+	file, header, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
+		return
+	}
+	defer file.Close()
 
-    file, header, err := r.FormFile("thumbnail")
-    if err != nil {
-        respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
-        return
-    }
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", err)
+		return
+	}
 
-    defer file.Close()
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Invalid file type", nil)
+		return
+	}
 
-    data, err := io.ReadAll(file)
-    if err != nil {
-        respondWithError(w, http.StatusBadRequest, "Unable to read data from thumbnail", err)
-        return
-    }
+	assetPath := getAssetPath(mediaType)
+	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
-    mediaType := header.Header.Get("Content-Type")
-    if mediaType == "" {
-        mediaType = "image/png"
-    }
+	dst, err := os.Create(assetDiskPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create file on server", err)
+		return
+	}
+	defer dst.Close()
+	if _, err = io.Copy(dst, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving file", err)
+		return
+	}
 
-    dataEncoded := base64.StdEncoding.EncodeToString(data)
-    // The format is:data:<media-type>;base64,<data>
-    // Create a data URL with the media type and base64 encoded image data.
-    dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, dataEncoded)
 
-    vid, err := cfg.db.GetVideo(videoID)
-    if err != nil {
-        respondWithError(w, http.StatusUnauthorized, "User not authorized", err)
-        return
-    }
+	video, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video", err)
+		return
+	}
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
+		return
+	}
 
-    //tn := thumbnail{
-    //    data: data,
-    //    mediaType: header.Header.Get("Content-Type"),
-    //}
+	url := cfg.getAssetURL(assetPath)
+	video.ThumbnailURL = &url
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
+		return
+	}
 
-    //videoThumbnails[vid.ID] = tn
-
-    //thumbnailUrl := fmt.Sprintf("/api/thumbnails/%s", vid.ID)
-    //vid.ThumbnailURL =  &thumbnailUrl
-    vid.ThumbnailURL =  &dataURL
-
-    err = cfg.db.UpdateVideo(vid)
-    if err != nil {
-        respondWithError(w, http.StatusBadRequest, "", err)
-        return
-    }
-
-    respondWithJSON(w, http.StatusOK, struct {
-        Message string `json:"message"`
-    }{
-        Message: "Thumbnail uploaded successfully",
-    })
-
+	respondWithJSON(w, http.StatusOK, video)
 }
+
